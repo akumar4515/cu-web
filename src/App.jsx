@@ -27,10 +27,32 @@ function App() {
       onDisconnected: () => setConnected(false),
       onDevices: setDevices,
       onStatus: setStatus,
+
+      // 🔥 FIXED STREAM HANDLING
       onRemoteStream: (stream) => {
+        console.log("✅ Stream received:", stream);
+
         if (!videoRef.current) return;
-        videoRef.current.srcObject = stream;
+
+        const video = videoRef.current;
+
+        // Reset first
+        video.srcObject = null;
+
+        // Attach new stream
+        video.srcObject = stream;
+
+        // Force play (VERY IMPORTANT)
+        video
+          .play()
+          .then(() => {
+            console.log("🎥 Video playing");
+          })
+          .catch((err) => {
+            console.error("❌ Video play error:", err);
+          });
       },
+
       onDeviceOffline: (deviceId) => {
         if (selectedDeviceIdRef.current === deviceId) {
           setSelectedDeviceId("");
@@ -51,7 +73,9 @@ function App() {
 
   const handleSelectDevice = async (deviceId) => {
     setSelectedDeviceId(deviceId);
+
     const response = await clientRef.current?.watchDevice(deviceId);
+
     if (!response?.ok) {
       setSelectedDeviceId("");
     }
@@ -73,7 +97,11 @@ function App() {
           devices.map((device) => (
             <button
               key={device.deviceId}
-              className={selectedDeviceId === device.deviceId ? "device active" : "device"}
+              className={
+                selectedDeviceId === device.deviceId
+                  ? "device active"
+                  : "device"
+              }
               onClick={() => handleSelectDevice(device.deviceId)}
               type="button"
             >
@@ -81,14 +109,22 @@ function App() {
               <span className={device.isStreaming ? "pill on" : "pill off"}>
                 {device.isStreaming ? "streaming" : "idle"}
               </span>
-              <span className="meta">viewers: {device.viewerCount ?? 0}</span>
+              <span className="meta">
+                viewers: {device.viewerCount ?? 0}
+              </span>
             </button>
           ))
         )}
       </section>
 
       <section className="viewer">
-        <video ref={videoRef} autoPlay playsInline controls={false} muted />
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{ width: "100%", background: "black" }}
+        />
       </section>
     </div>
   );

@@ -1,126 +1,91 @@
 import { io } from "socket.io-client";
 
 const rtcConfig = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    {
+      urls: "turn:openrelay.metered.ca:80",
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    }
+  ]
 };
 
 let socket;
 let peerConnection;
-let currentSenderSocketId;
+let currentSender;
 
-function cleanupPeer() {
-  if (peerConnection) {
-    peerConnection.ontrack = null;
-    peerConnection.onicecandidate = null;
-    peerConnection.onconnectionstatechange = null;
-    peerConnection.close();
-  }
+function cleanup() {
+  peerConnection?.close();
   peerConnection = null;
-  currentSenderSocketId = null;
+  currentSender = null;
 }
 
 export function createViewerClient({
   backendUrl,
-  onConnected,
-  onDisconnected,
-  onDevices,
   onRemoteStream,
   onStatus,
-  onDeviceOffline
+  onDevices
 }) {
-  socket = io(backendUrl, {
-    transports: ["polling", "websocket"],
-    reconnection: true,
-    reconnectionDelay: 2000,
-    reconnectionDelayMax: 10000
-  });
+  socket = io(backendUrl, { transports: ["websocket"] });
 
   socket.on("connect", () => {
-    onConnected?.();
-    onStatus?.("Connected");
-    // Request current device list via ack as primary path
-    socket.emit("viewer:get-devices", {}, (response) => {
-      if (response?.ok) onDevices?.(response.devices || []);
+    onStatus("Connected");
+    socket.emit("viewer:get-devices", {}, (res) => {
+      if (res?.ok) onDevices(res.devices);
     });
   });
 
-  socket.on("connect_error", (err) => {
-    onStatus?.(`Connection error: ${err?.message || "unreachable"}`);
-  });
-
-  socket.on("disconnect", () => {
-    onDisconnected?.();
-    onStatus?.("Disconnected. Reconnecting...");
-    cleanupPeer();
-  });
-
-  // Server broadcasts this on connection and whenever the device list changes
   socket.on("devices:list", (devices) => {
-    onDevices?.(devices || []);
-  });
-
-  socket.on("viewer:device-offline", ({ deviceId }) => {
-    onDeviceOffline?.(deviceId);
-    onStatus?.("Selected device went offline");
-    cleanupPeer();
+    onDevices(devices);
   });
 
   socket.on("webrtc:offer", async ({ from, sdp }) => {
-    if (!sdp) return;
-    currentSenderSocketId = from;
+    currentSender = from;
 
-    if (!peerConnection) {
-      peerConnection = new RTCPeerConnection(rtcConfig);
+    peerConnection = new RTCPeerConnection(rtcConfig);
 
-      peerConnection.ontrack = (event) => {
-        const stream = event.streams?.[0];
-        if (stream) onRemoteStream?.(stream);
-      };
+    peerConnection.ontrack = (event) => {
+      const stream =
+        event.streams?.[0] || new MediaStream([event.track]);
+      onRemoteStream(stream);
+    };
 
-      peerConnection.onicecandidate = (event) => {
-        if (!event.candidate || !currentSenderSocketId) return;
+    peerConnection.onicecandidate = (e) => {
+      if (e.candidate) {
         socket.emit("webrtc:ice-candidate", {
-          to: currentSenderSocketId,
-          candidate: event.candidate
+          to: from,
+          candidate: e.candidate
         });
-      };
+      }
+    };
 
-      peerConnection.onconnectionstatechange = () => {
-        onStatus?.(`Peer: ${peerConnection.connectionState}`);
-      };
-    }
+    await peerConnection.setRemoteDescription(
+      new RTCSessionDescription(sdp)
+    );
 
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
+
     socket.emit("webrtc:answer", { to: from, sdp: answer });
   });
 
   socket.on("webrtc:ice-candidate", async ({ candidate }) => {
-    if (!peerConnection || !candidate) return;
-    try {
-      await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (_) {
-      // Ignore stale candidates.
+    if (peerConnection && candidate) {
+      await peerConnection.addIceCandidate(
+        new RTCIceCandidate(candidate)
+      );
     }
   });
 
   return {
-    watchDevice: (deviceId) =>
-      new Promise((resolve) => {
-        cleanupPeer();
-        socket.emit("viewer:watch-device", { deviceId }, (response) => {
-          if (!response?.ok) {
-            onStatus?.(response?.error || "Failed to watch device");
-          } else {
-            onStatus?.("Waiting for stream...");
-          }
-          resolve(response);
-        });
-      }),
+    watchDevice: (deviceId) => {
+      cleanup();
+      socket.emit("viewer:watch-device", { deviceId });
+    },
     disconnect: () => {
-      cleanupPeer();
-      socket?.close();
+      cleanup();
+      socket.close();
     }
   };
 }
