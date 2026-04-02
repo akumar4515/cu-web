@@ -29,8 +29,10 @@ export function createViewerClient({
   onDeviceOffline
 }) {
   socket = io(backendUrl, {
-    transports: ["websocket"],
-    reconnection: true
+    transports: ["polling", "websocket"],
+    reconnection: true,
+    reconnectionDelay: 2000,
+    reconnectionDelayMax: 10000
   });
 
   socket.on("connect", () => {
