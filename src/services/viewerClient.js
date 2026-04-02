@@ -38,9 +38,14 @@ export function createViewerClient({
   socket.on("connect", () => {
     onConnected?.();
     onStatus?.("Connected");
+    // Request current device list via ack as primary path
     socket.emit("viewer:get-devices", {}, (response) => {
       if (response?.ok) onDevices?.(response.devices || []);
     });
+  });
+
+  socket.on("connect_error", (err) => {
+    onStatus?.(`Connection error: ${err?.message || "unreachable"}`);
   });
 
   socket.on("disconnect", () => {
@@ -49,6 +54,7 @@ export function createViewerClient({
     cleanupPeer();
   });
 
+  // Server broadcasts this on connection and whenever the device list changes
   socket.on("devices:list", (devices) => {
     onDevices?.(devices || []);
   });
